@@ -1,0 +1,242 @@
+package utils
+
+import (
+	"fmt"
+	"iter"
+	"sort"
+	"strings"
+	"sync/atomic"
+)
+
+// ConcurrentQueue
+
+type ConcurrentQueue[T any] struct {
+	ProcessedNum atomic.Uint64
+	Items        atomic.Pointer[NList[T]]
+}
+
+// make holder with Pointer[*NList], add method, etc
+type NList[T any] struct {
+	Number uint64
+	Item   T
+	Next   *NList[T]
+}
+
+func (q *ConcurrentQueue[T]) Dequeue() iter.Seq[T] {
+	head := q.Items.Swap(nil)
+	processed := q.ProcessedNum.Swap(head.Number)
+	return func(yield func(T) bool) {
+		fmt.Println("PROCESSED ", processed)
+		//for ; head != nil; head = head.Next {
+		//	fmt.Println("ITEM ", head.Number, ": ", head.Item)
+		//}
+		for ; head != nil && head.Number > processed; head = head.Next {
+			fmt.Println("YIELDING ITEM: ", head.Item)
+			if !yield(head.Item) {
+				break
+			}
+		}
+	}
+}
+
+func (q *ConcurrentQueue[T]) Add(item T) {
+	for {
+		var n uint64
+		oldHead := q.Items.Load()
+		if oldHead != nil {
+			n = oldHead.Number + 1
+		} else {
+			n = q.ProcessedNum.Load() + 1
+		}
+		newHead := &NList[T]{
+			Number: n,
+			Item:   item,
+			Next:   oldHead,
+		}
+		if q.Items.CompareAndSwap(oldHead, newHead) {
+			return
+		}
+	}
+}
+
+func (q *ConcurrentQueue[T]) IsEmpty() bool {
+	return q.Items.Load() == nil
+}
+
+// Set
+
+type Set[T comparable] map[T]bool
+
+func NewSet[T comparable](elements ...T) Set[T] {
+	l := len(elements)
+	if l == 0 {
+		l = 8
+	}
+	result := make(Set[T], l)
+	for _, item := range elements {
+		result[item] = true
+	}
+	return result
+}
+
+func (s Set[T]) ToSlice() []T {
+	items := make([]T, len(s))
+	i := 0
+	for item := range s {
+		items[i] = item
+		i += 1
+	}
+	return items
+}
+
+func (s Set[T]) Merge(s2 Set[T]) Set[T] {
+	if s == nil && len(s2) > 0 {
+		// this won't alter the receiver but the returned set will at least be correct
+		s = NewSet[T]()
+	}
+	for k, v := range s2 {
+		s[k] = v
+	}
+	return s
+}
+
+func (s Set[T]) Copy() Set[T] {
+	return Set[T]{}.Merge(s)
+}
+
+func (s Set[T]) Union(s2 Set[T]) Set[T] {
+	if len(s) == 0 {
+		return s2
+	} else if len(s2) == 0 {
+		return s
+	}
+	return s.Copy().Merge(s2)
+}
+
+func (s Set[T]) Complement(s2 Set[T]) Set[T] {
+	return s.Copy().Subtract(s2)
+}
+
+func (s Set[T]) Subtract(s2 Set[T]) Set[T] {
+	for item := range s2 {
+		delete(s, item)
+	}
+	return s
+}
+
+func (s Set[T]) Add(els ...T) Set[T] {
+	if s == nil {
+		return NewSet(els...)
+	}
+	for _, el := range els {
+		s[el] = true
+	}
+	return s
+}
+
+func (s Set[T]) Remove(els ...T) Set[T] {
+	for _, el := range els {
+		delete(s, el)
+	}
+	return s
+}
+
+func (s Set[T]) Has(els ...T) bool {
+	for _, el := range els {
+		if !s[el] {
+			return false
+		}
+	}
+	return true
+}
+
+func (s Set[T]) Contains(s2 Set[T]) bool {
+	if len(s) < len(s2) {
+		return false
+	}
+	for item := range s2 {
+		if !s.Has(item) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s Set[T]) Intersection(s2 Set[T]) Set[T] {
+	result := make(Set[T], 0)
+	if len(s2) < len(s) {
+		s, s2 = s2, s
+	}
+	for el := range s {
+		if s2.Has(el) {
+			result.Add(el)
+		}
+	}
+	return result
+}
+
+func (s Set[T]) Intersects(s2 Set[T]) bool {
+	if len(s2) < len(s) {
+		s, s2 = s2, s
+	}
+	for item := range s {
+		if s2.Has(item) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s Set[T]) IsEmpty() bool {
+	return len(s) == 0
+}
+
+func (s Set[T]) String() string {
+	sl := s.ToSlice()
+	var f func(i, j int) bool
+	var strs []string
+	sortStrings := false
+
+	switch x := any(sl).(type) {
+	case []int:
+		f = func(i, j int) bool { return x[i] < x[j] }
+	case []int8:
+		f = func(i, j int) bool { return x[i] < x[j] }
+	case []int16:
+		f = func(i, j int) bool { return x[i] < x[j] }
+	case []int32:
+		f = func(i, j int) bool { return x[i] < x[j] }
+	case []int64:
+		f = func(i, j int) bool { return x[i] < x[j] }
+	case []uint:
+		f = func(i, j int) bool { return x[i] < x[j] }
+	case []uint8:
+		f = func(i, j int) bool { return x[i] < x[j] }
+	case []uint16:
+		f = func(i, j int) bool { return x[i] < x[j] }
+	case []uint32:
+		f = func(i, j int) bool { return x[i] < x[j] }
+	case []uint64:
+		f = func(i, j int) bool { return x[i] < x[j] }
+	case []uintptr:
+		f = func(i, j int) bool { return x[i] < x[j] }
+	case []float32:
+		f = func(i, j int) bool { return x[i] < x[j] }
+	case []float64:
+		f = func(i, j int) bool { return x[i] < x[j] }
+	default:
+		// defer sorting until after string conversion
+		sortStrings = true
+	}
+	if f != nil {
+		sort.Slice(sl, f)
+	}
+	strs = make([]string, len(sl))
+	for i, v := range sl {
+		strs[i] = fmt.Sprint(v)
+	}
+	if sortStrings {
+		sort.Strings(strs)
+	}
+	return fmt.Sprintf("Set[%s]", strings.Join(strs, ", "))
+}
