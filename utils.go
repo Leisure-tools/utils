@@ -33,11 +33,9 @@ func (q *ConcurrentQueue[T]) Dequeue() iter.Seq[T] {
 }
 
 func (q *ConcurrentQueue[T]) Add(item T) {
+	newHead := &NList[T]{Item: item}
 	for {
-		newHead := &NList[T]{
-			Item: item,
-			Next: q.Items.Load(),
-		}
+		newHead.Next = q.Items.Load()
 		if q.Items.CompareAndSwap(newHead.Next, newHead) {
 			return
 		}
