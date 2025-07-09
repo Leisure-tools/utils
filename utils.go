@@ -11,27 +11,20 @@ import (
 // ConcurrentQueue
 
 type ConcurrentQueue[T any] struct {
-	ProcessedNum atomic.Uint64
-	Items        atomic.Pointer[NList[T]]
+	Items atomic.Pointer[NList[T]]
 }
 
 // make holder with Pointer[*NList], add method, etc
 type NList[T any] struct {
-	Number uint64
-	Item   T
-	Next   *NList[T]
+	Processed atomic.Bool
+	Item      T
+	Next      *NList[T]
 }
 
 func (q *ConcurrentQueue[T]) Dequeue() iter.Seq[T] {
 	head := q.Items.Swap(nil)
-	processed := q.ProcessedNum.Swap(head.Number)
 	return func(yield func(T) bool) {
-		fmt.Println("PROCESSED ", processed)
-		//for ; head != nil; head = head.Next {
-		//	fmt.Println("ITEM ", head.Number, ": ", head.Item)
-		//}
-		for ; head != nil && head.Number > processed; head = head.Next {
-			fmt.Println("YIELDING ITEM: ", head.Item)
+		for ; head != nil && head.Processed.CompareAndSwap(false, true); head = head.Next {
 			if !yield(head.Item) {
 				break
 			}
@@ -41,19 +34,11 @@ func (q *ConcurrentQueue[T]) Dequeue() iter.Seq[T] {
 
 func (q *ConcurrentQueue[T]) Add(item T) {
 	for {
-		var n uint64
-		oldHead := q.Items.Load()
-		if oldHead != nil {
-			n = oldHead.Number + 1
-		} else {
-			n = q.ProcessedNum.Load() + 1
-		}
 		newHead := &NList[T]{
-			Number: n,
-			Item:   item,
-			Next:   oldHead,
+			Item: item,
+			Next: q.Items.Load(),
 		}
-		if q.Items.CompareAndSwap(oldHead, newHead) {
+		if q.Items.CompareAndSwap(newHead.Next, newHead) {
 			return
 		}
 	}
