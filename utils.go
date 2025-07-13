@@ -3,6 +3,7 @@ package utils
 import (
 	"fmt"
 	"iter"
+	"os"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -32,7 +33,7 @@ func (q *ConcurrentQueue[T]) Dequeue() iter.Seq[T] {
 	}
 }
 
-func (q *ConcurrentQueue[T]) Add(item T) {
+func (q *ConcurrentQueue[T]) Enqueue(item T) {
 	newHead := &NList[T]{Item: item}
 	for {
 		newHead.Next = q.Items.Load()
@@ -222,4 +223,140 @@ func (s Set[T]) String() string {
 		sort.Strings(strs)
 	}
 	return fmt.Sprintf("Set[%s]", strings.Join(strs, ", "))
+}
+
+// Iters
+
+type Iterable[T any] interface {
+	Iterate() iter.Seq[T]
+}
+
+type Iterable2[K any, T any] interface {
+	Iterate2() iter.Seq2[K, T]
+}
+
+type sliceIterable[T any] []T
+type setIterable[T comparable] Set[T]
+type mapIterable[K comparable, T any] map[K]T
+
+func SliceIterable[T any](slice []T) sliceIterable[T] {
+	return sliceIterable[T](slice)
+}
+
+func (it sliceIterable[T]) Iterate() iter.Seq[T] {
+	return func(yield func(item T) bool) {
+		for _, item := range []T(it) {
+			if !yield(item) {
+				return
+			}
+		}
+	}
+}
+
+func (it sliceIterable[T]) Iterate2() iter.Seq2[int, T] {
+	return func(yield func(key int, item T) bool) {
+		for i, item := range []T(it) {
+			if !yield(i, item) {
+				return
+			}
+		}
+	}
+}
+
+func SetIterable[T comparable](set Set[T]) setIterable[T] {
+	return setIterable[T](set)
+}
+
+func (it setIterable[T]) Iterate() iter.Seq[T] {
+	return func(yield func(item T) bool) {
+		for item := range Set[T](it) {
+			if !yield(item) {
+				return
+			}
+		}
+	}
+}
+
+func (it setIterable[T]) Iterate2() iter.Seq2[int, T] {
+	count := 0
+	return func(yield func(key int, item T) bool) {
+		for item := range Set[T](it) {
+			if !yield(count, item) {
+				return
+			}
+			count++
+		}
+	}
+}
+
+func MapIterable[K comparable, T any](m map[K]T) mapIterable[K, T] {
+	return mapIterable[K, T](m)
+}
+
+func (it mapIterable[K, T]) Iterate() iter.Seq[T] {
+	return func(yield func(item T) bool) {
+		for _, item := range map[K]T(it) {
+			if !yield(item) {
+				return
+			}
+		}
+	}
+}
+
+func (it mapIterable[K, T]) Iterate2() iter.Seq2[K, T] {
+	return func(yield func(key K, item T) bool) {
+		for key, item := range map[K]T(it) {
+			if !yield(key, item) {
+				return
+			}
+		}
+	}
+}
+
+func JoinIters[T any](iters ...Iterable[T]) iter.Seq[T] {
+	return func(yield func(item T) bool) {
+		for _, it := range iters {
+			for item := range it.Iterate() {
+				if !yield(item) {
+					return
+				}
+			}
+		}
+	}
+}
+
+func JoinIters2[K comparable, T any](iters ...Iterable2[K, T]) iter.Seq2[K, T] {
+	return func(yield func(key K, item T) bool) {
+		for _, it := range iters {
+			for key, item := range it.Iterate2() {
+				if !yield(key, item) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// misc
+
+func EnsliceStrings(item any) []string {
+	if item == nil {
+		return nil
+	} else if s, ok := item.(string); ok {
+		return []string{s}
+	} else if sA, ok := item.([]string); ok {
+		return sA
+	} else if a, ok := item.([]any); ok {
+		t := make([]string, 0, len(a))
+		for _, element := range a {
+			if elStr, ok := element.(string); ok {
+				t = append(t, elStr)
+			} else {
+				fmt.Fprintf(os.Stderr, "bad string value: %s\n", elStr)
+			}
+		}
+		return t
+	}
+	fmt.Fprintf(os.Stderr, "bad string array value: %s\n", item)
+	return nil
 }
