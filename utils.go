@@ -51,6 +51,14 @@ func (q *ConcurrentQueue[T]) IsEmpty() bool {
 
 type Set[T comparable] map[T]bool
 
+func NewSetSeq[T comparable](it iter.Seq[T]) Set[T] {
+	result := make(Set[T])
+	for item := range it {
+		result[item] = true
+	}
+	return result
+}
+
 func NewSet[T comparable](elements ...T) Set[T] {
 	l := len(elements)
 	if l == 0 {
@@ -175,6 +183,28 @@ func (s Set[T]) IsEmpty() bool {
 	return len(s) == 0
 }
 
+func (s Set[T]) Seq() iter.Seq[T] {
+	return func(yield func(item T) bool) {
+		for item := range s {
+			if !yield(item) {
+				return
+			}
+		}
+	}
+}
+
+func (s Set[T]) Seq2() iter.Seq2[int, T] {
+	count := 0
+	return func(yield func(key int, item T) bool) {
+		for item := range s {
+			if !yield(count, item) {
+				return
+			}
+			count++
+		}
+	}
+}
+
 func (s Set[T]) String() string {
 	sl := s.ToSlice()
 	var f func(i, j int) bool
@@ -227,23 +257,41 @@ func (s Set[T]) String() string {
 
 // Iters
 
-type Iterable[T any] interface {
-	Iterate() iter.Seq[T]
+type Seqable[T any] interface {
+	Seq() iter.Seq[T]
 }
 
-type Iterable2[K any, T any] interface {
-	Iterate2() iter.Seq2[K, T]
+type Seqable2[K any, T any] interface {
+	Seq2() iter.Seq2[K, T]
 }
 
-type sliceIterable[T any] []T
-type setIterable[T comparable] Set[T]
-type mapIterable[K comparable, T any] map[K]T
+type sliceSeqs[T any] []T
+type mapSeqs[K comparable, T any] map[K]T
 
-func SliceIterable[T any](slice []T) sliceIterable[T] {
-	return sliceIterable[T](slice)
+func SliceSeq[T any](slice []T) iter.Seq[T] {
+	return SliceSeqs(slice).Seq()
+}
+func SliceSeq2[T any](slice []T) iter.Seq2[int, T] {
+	return SliceSeqs(slice).Seq2()
+}
+func SetSeq[T comparable](set Set[T]) iter.Seq[T] {
+	return set.Seq()
+}
+func SetSeq2[T comparable](set Set[T]) iter.Seq2[int, T] {
+	return set.Seq2()
+}
+func MapSeq[K comparable, T any](m map[K]T) iter.Seq[T] {
+	return MapSeqs(m).Seq()
+}
+func MapSeq2[K comparable, T any](m map[K]T) iter.Seq2[K, T] {
+	return MapSeqs(m).Seq2()
 }
 
-func (it sliceIterable[T]) Iterate() iter.Seq[T] {
+func SliceSeqs[T any](slice []T) sliceSeqs[T] {
+	return sliceSeqs[T](slice)
+}
+
+func (it sliceSeqs[T]) Seq() iter.Seq[T] {
 	return func(yield func(item T) bool) {
 		for _, item := range []T(it) {
 			if !yield(item) {
@@ -253,7 +301,7 @@ func (it sliceIterable[T]) Iterate() iter.Seq[T] {
 	}
 }
 
-func (it sliceIterable[T]) Iterate2() iter.Seq2[int, T] {
+func (it sliceSeqs[T]) Seq2() iter.Seq2[int, T] {
 	return func(yield func(key int, item T) bool) {
 		for i, item := range []T(it) {
 			if !yield(i, item) {
@@ -263,37 +311,15 @@ func (it sliceIterable[T]) Iterate2() iter.Seq2[int, T] {
 	}
 }
 
-func SetIterable[T comparable](set Set[T]) setIterable[T] {
-	return setIterable[T](set)
+func SetSeqs[T comparable](set Set[T]) Set[T] {
+	return set
 }
 
-func (it setIterable[T]) Iterate() iter.Seq[T] {
-	return func(yield func(item T) bool) {
-		for item := range Set[T](it) {
-			if !yield(item) {
-				return
-			}
-		}
-	}
+func MapSeqs[K comparable, T any](m map[K]T) mapSeqs[K, T] {
+	return mapSeqs[K, T](m)
 }
 
-func (it setIterable[T]) Iterate2() iter.Seq2[int, T] {
-	count := 0
-	return func(yield func(key int, item T) bool) {
-		for item := range Set[T](it) {
-			if !yield(count, item) {
-				return
-			}
-			count++
-		}
-	}
-}
-
-func MapIterable[K comparable, T any](m map[K]T) mapIterable[K, T] {
-	return mapIterable[K, T](m)
-}
-
-func (it mapIterable[K, T]) Iterate() iter.Seq[T] {
+func (it mapSeqs[K, T]) Seq() iter.Seq[T] {
 	return func(yield func(item T) bool) {
 		for _, item := range map[K]T(it) {
 			if !yield(item) {
@@ -303,7 +329,7 @@ func (it mapIterable[K, T]) Iterate() iter.Seq[T] {
 	}
 }
 
-func (it mapIterable[K, T]) Iterate2() iter.Seq2[K, T] {
+func (it mapSeqs[K, T]) Seq2() iter.Seq2[K, T] {
 	return func(yield func(key K, item T) bool) {
 		for key, item := range map[K]T(it) {
 			if !yield(key, item) {
@@ -313,10 +339,24 @@ func (it mapIterable[K, T]) Iterate2() iter.Seq2[K, T] {
 	}
 }
 
-func JoinIters[T any](iters ...Iterable[T]) iter.Seq[T] {
+func JoinStrings(iter Seqable[string], sep string) string {
+	sb := &strings.Builder{}
+	first := true
+	for str := range iter.Seq() {
+		if first {
+			first = false
+		} else {
+			fmt.Fprint(sb, sep)
+		}
+		fmt.Fprint(sb, str)
+	}
+	return sb.String()
+}
+
+func Flatten[T any](iters ...Seqable[T]) iter.Seq[T] {
 	return func(yield func(item T) bool) {
 		for _, it := range iters {
-			for item := range it.Iterate() {
+			for item := range it.Seq() {
 				if !yield(item) {
 					return
 				}
@@ -325,10 +365,10 @@ func JoinIters[T any](iters ...Iterable[T]) iter.Seq[T] {
 	}
 }
 
-func JoinIters2[K comparable, T any](iters ...Iterable2[K, T]) iter.Seq2[K, T] {
+func Flatten2[K comparable, T any](iters ...Seqable2[K, T]) iter.Seq2[K, T] {
 	return func(yield func(key K, item T) bool) {
 		for _, it := range iters {
-			for key, item := range it.Iterate2() {
+			for key, item := range it.Seq2() {
 				if !yield(key, item) {
 					return
 				}
@@ -338,7 +378,6 @@ func JoinIters2[K comparable, T any](iters ...Iterable2[K, T]) iter.Seq2[K, T] {
 }
 
 // misc
-
 func EnsliceStrings(item any) []string {
 	if item == nil {
 		return nil
@@ -359,4 +398,32 @@ func EnsliceStrings(item any) []string {
 	}
 	fmt.Fprintf(os.Stderr, "bad string array value: %s\n", item)
 	return nil
+}
+
+func PropStrings(value any) iter.Seq[string] {
+	return func(yield func(item string) bool) {
+		yieldif := func(str string) bool {
+			if str != "" {
+				return yield(str)
+			}
+			return true
+		}
+		if vstr, isString := value.(string); isString {
+			yieldif(vstr)
+		} else if vstrs, isStrings := value.([]string); isStrings {
+			for _, str := range vstrs {
+				if !yieldif(str) {
+					return
+				}
+			}
+		} else if varray, isArray := value.([]any); isArray {
+			for _, item := range varray {
+				if str, isString := item.(string); isString {
+					if !yieldif(str) {
+						return
+					}
+				}
+			}
+		}
+	}
 }
